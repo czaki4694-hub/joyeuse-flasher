@@ -1,9 +1,14 @@
-"""Joyeuse Flasher v3 - Redmi Note 9 Pro (joyeuse) بواجهة عصرية (CustomTkinter).
+"""Joyeuse Flasher v3 (Offline) - Redmi Note 9 Pro (joyeuse) بواجهة عصرية (CustomTkinter).
 
-- كتحمل platform-tools من Google أوتوماتيكيا
-- كتحمل Fastboot ROM من لائحة roms.json (أو من رابط تلصقو) وكتفلاشيه
+- كتخدم أوفلاين: كتقلب على platform-tools وROMs محلياً (الانترنت اختياري)
 - معلومات الجهاز، Reboot، فلاش Recovery وBoot (Magisk)
 - تبويب التطبيقات: Debloat مع استرجاع، تثبيت وتصدير APK
+
+الأماكن اللي كتقلب فيها الأداة (بالترتيب):
+  platform-tools:  <exe>/platform-tools  |  <exe>/joyeuse_data/platform-tools
+                   ولا ملف platform-tools*.zip بجنب الـ exe (كيتفك أوتوماتيكيا)
+  ROMs:            <exe>/roms  |  <exe>/joyeuse_data/roms
+                   (ملفات .tgz/.zip ولا فولدرات فيها flash_all.bat)
 """
 import json
 import os
@@ -19,13 +24,17 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
-APP_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+if getattr(sys, "frozen", False):
+    APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    APP_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 WORK_DIR = os.path.join(APP_DIR, "joyeuse_data")
-TOOLS_DIR = os.path.join(WORK_DIR, "platform-tools")
 ROMS_DIR = os.path.join(WORK_DIR, "roms")
 PT_URL = "https://dl.google.com/android/repository/platform-tools-latest-windows.zip"
 ROMS_JSON_URL = "https://raw.githubusercontent.com/czaki4694-hub/joyeuse-flasher/main/roms.json"
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+EXE_EXT = ".exe" if os.name == "nt" else ""
+ARCHIVE_RE = r"\.(tgz|tar\.gz|tar|zip)$"
 
 os.makedirs(ROMS_DIR, exist_ok=True)
 
@@ -46,7 +55,6 @@ SUGGESTED = {
 }
 
 # ---------- الألوان (فاتح, داكن) ----------
-# باش تبدل اللون الرئيسي: عدل ACCENT و ACCENT_HOVER (مثلا أزرق: #2F6FED / #2459C4)
 ACCENT = "#FF6900"
 ACCENT_HOVER = "#E05D00"
 DANGER = "#D93025"
@@ -62,8 +70,22 @@ FONT = "Segoe UI"
 MONO = "Consolas"
 
 
+def find_tools_dir():
+    """كيقلب على platform-tools محلياً (مجمّعة مع الـ exe، ولا بجنبو)."""
+    cands = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        cands.append(os.path.join(meipass, "platform-tools"))
+    cands.append(os.path.join(APP_DIR, "platform-tools"))
+    cands.append(os.path.join(WORK_DIR, "platform-tools"))
+    for d in cands:
+        if os.path.exists(os.path.join(d, "fastboot" + EXE_EXT)):
+            return d
+    return os.path.join(WORK_DIR, "platform-tools")
+
+
 def tool(name):
-    return os.path.join(TOOLS_DIR, name + (".exe" if os.name == "nt" else ""))
+    return os.path.join(find_tools_dir(), name + EXE_EXT)
 
 
 def fastboot_exe():
@@ -74,11 +96,45 @@ def adb_exe():
     return tool("adb")
 
 
+def has_flash_script(folder):
+    for _, _, files in os.walk(folder):
+        if "flash_all.bat" in files:
+            return True
+    return False
+
+
+def find_rom_root(folder):
+    for dp, _, files in os.walk(folder):
+        if "flash_all.bat" in files:
+            return dp
+    return folder
+
+
+def scan_local_roms():
+    """كيرجع ROMs لقاها محلياً: [{'name':..., 'path':...}]"""
+    found, seen = [], set()
+    for base in (os.path.join(APP_DIR, "roms"), ROMS_DIR):
+        if not os.path.isdir(base):
+            continue
+        entries = sorted(os.listdir(base))
+        stems = {re.sub(ARCHIVE_RE, "", e) for e in entries if re.search(ARCHIVE_RE, e)}
+        for e in entries:
+            p = os.path.join(base, e)
+            if os.path.abspath(p) in seen:
+                continue
+            if os.path.isfile(p) and re.search(ARCHIVE_RE, e):
+                found.append({"name": f"[محلي] {e}", "path": p})
+            elif os.path.isdir(p) and e not in stems and has_flash_script(p):
+                found.append({"name": f"[محلي] {e}", "path": p})
+            seen.add(os.path.abspath(p))
+    return found
+
+
 class App(ctk.CTk):
     def __init__(self):
         ctk.set_appearance_mode("light")
         super().__init__()
-        self.title("Joyeuse Flasher - Redmi Note 9 Pro")
+        self.title("Joyeuse Flasher (Offline) - Redmi Note 9 Pro")
         self.geometry("920x840")
         self.minsize(860, 720)
 
@@ -103,7 +159,9 @@ class App(ctk.CTk):
         self.pkg_filter = tk.StringVar()
         self.busy = False
         self._build_ui()
-        self.log("مرحبا. 1) حمل الأدوات 2) حمل/اختار ROM 3) فلاش. ولا استعمل التبويبات الأخرى.")
+        self.log("مرحبا (Offline). 1) جهز الأدوات 2) اختار ROM محلي ولا فولدر 3) فلاش.")
+        self.log(f"platform-tools: {find_tools_dir()}")
+        self.log(f"فولدر ROMs: {os.path.join(APP_DIR, 'roms')}")
         threading.Thread(target=self.load_rom_list, daemon=True).start()
 
     # ---------- مكونات الواجهة ----------
@@ -145,7 +203,7 @@ class App(ctk.CTk):
         left = ctk.CTkFrame(header, fg_color="transparent")
         left.pack(side="left")
         ctk.CTkLabel(left, text="Joyeuse Flasher", font=self.f_title, text_color=ACCENT).pack(anchor="w")
-        ctk.CTkLabel(left, text="Redmi Note 9 Pro  •  joyeuse", font=self.f_small,
+        ctk.CTkLabel(left, text="Redmi Note 9 Pro  •  joyeuse  •  Offline", font=self.f_small,
                      text_color=MUTED).pack(anchor="w")
         self.theme_switch = ctk.CTkSwitch(header, text="داكن", command=self.toggle_theme,
                                           progress_color=ACCENT, font=self.f_body, text_color=TEXT)
@@ -179,20 +237,25 @@ class App(ctk.CTk):
         self.style_listbox()
 
     def _tab_rom(self, t):
-        c = self.card(t, "1) الأدوات", "كتحمل adb وfastboot من Google مرة وحدة.")
+        c = self.card(t, "1) الأدوات",
+                      "كتقلب على platform-tools محلياً (فولدر platform-tools بجنب الأداة ولا ملف zip). "
+                      "الانترنت غير احتياطي.")
         r = self.row(c)
-        self.button(r, "تحميل platform-tools", lambda: self.run_bg(self.get_tools), width=170).pack(side="left", padx=(0, 8))
+        self.button(r, "تجهيز platform-tools", lambda: self.run_bg(self.get_tools), width=170).pack(side="left", padx=(0, 8))
         self.button(r, "كشف الهاتف", lambda: self.run_bg(self.detect), "soft").pack(side="left")
 
-        c = self.card(t, "2) ROM", "اختار من اللائحة ولا لصق رابط Fastboot ROM، ومن بعد حدد الفولدر.")
+        c = self.card(t, "2) ROM",
+                      "اختار ROM محلي من اللائحة، ولا حدد الفولدر مباشرة (فيه flash_all.bat).")
         self.combo = ctk.CTkComboBox(c, values=[], state="readonly", height=34, corner_radius=8,
                                      font=self.f_body, dropdown_font=self.f_body,
                                      button_color=ACCENT, button_hover_color=ACCENT_HOVER)
-        self.combo.set("اللائحة فارغة: لصق رابط تحت")
+        self.combo.set("ما لقيت حتى ROM محلي: استعمل 'اختيار فولدر'")
         self.combo.pack(fill="x", pady=3)
         r = self.row(c)
-        self.entry(r, self.url, "رابط ROM (.tgz / .zip)").pack(side="left", fill="x", expand=True, padx=(0, 8))
-        self.button(r, "تحميل ROM", lambda: self.run_bg(self.download_rom)).pack(side="left")
+        self.entry(r, self.url, "رابط ROM (اختياري، كيحتاج انترنت)").pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.button(r, "تجهيز ROM", lambda: self.run_bg(self.download_rom)).pack(side="left", padx=(0, 6))
+        self.button(r, "تحديث اللائحة", lambda: threading.Thread(target=self.load_rom_list, daemon=True).start(),
+                    "soft", width=110).pack(side="left")
         r = self.row(c)
         self.entry(r, self.rom_dir, "فولدر ROM (فيه flash_all.bat)").pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.button(r, "اختيار فولدر", self.pick_dir, "soft").pack(side="left")
@@ -309,11 +372,11 @@ class App(ctk.CTk):
                 self.busy = False
         threading.Thread(target=wrap, daemon=True).start()
 
-    # ---------- download helpers ----------
+    # ---------- download helpers (اختياري، كيحتاج انترنت) ----------
     def download(self, url, dest):
         self.log(f"تحميل: {url}")
         req = urllib.request.Request(url, headers={"User-Agent": "JoyeuseFlasher/3.0"})
-        with urllib.request.urlopen(req) as r, open(dest, "wb") as f:
+        with urllib.request.urlopen(req, timeout=15) as r, open(dest, "wb") as f:
             total = int(r.headers.get("Content-Length", 0))
             done = 0
             while True:
@@ -326,67 +389,122 @@ class App(ctk.CTk):
                     self.set_progress(done * 100 / total)
         self.set_progress(0)
 
+    def local_tools_zip(self):
+        for base in (APP_DIR, WORK_DIR):
+            if os.path.isdir(base):
+                for fn in os.listdir(base):
+                    if fn.lower().startswith("platform-tools") and fn.lower().endswith(".zip"):
+                        return os.path.join(base, fn)
+        return None
+
     def get_tools(self):
         if os.path.exists(fastboot_exe()):
-            self.log("platform-tools موجودة من قبل.")
+            self.log(f"platform-tools موجودة: {find_tools_dir()}")
             return
         os.makedirs(WORK_DIR, exist_ok=True)
-        zp = os.path.join(WORK_DIR, "platform-tools.zip")
-        self.download(PT_URL, zp)
-        with zipfile.ZipFile(zp) as z:
-            z.extractall(WORK_DIR)
-        os.remove(zp)
-        self.log("تم تثبيت platform-tools.")
+        # 1) zip محلي
+        zp = self.local_tools_zip()
+        if zp:
+            self.log(f"فك الضغط من الملف المحلي: {zp}")
+            with zipfile.ZipFile(zp) as z:
+                z.extractall(WORK_DIR)
+            if os.path.exists(fastboot_exe()):
+                self.log("تم تجهيز platform-tools (من الملف المحلي).")
+                return
+        # 2) تحميل (غير إلا كان الانترنت)
+        try:
+            zp = os.path.join(WORK_DIR, "platform-tools.zip")
+            self.download(PT_URL, zp)
+            with zipfile.ZipFile(zp) as z:
+                z.extractall(WORK_DIR)
+            os.remove(zp)
+            self.log("تم تثبيت platform-tools.")
+        except Exception:
+            raise RuntimeError(
+                "platform-tools ما لقيتهاش وما كاينش انترنت.\n"
+                f"حط فولدر 'platform-tools' (فيه fastboot.exe وadb.exe) هنا:\n{APP_DIR}\n"
+                "ولا حط ملف platform-tools-latest-windows.zip فنفس الفولدر.")
 
     def ensure_tools(self):
         if not os.path.exists(fastboot_exe()):
             self.get_tools()
 
+    # ---------- ROMs ----------
     def load_rom_list(self):
+        remote = []
         try:
-            with urllib.request.urlopen(ROMS_JSON_URL, timeout=10) as r:
-                self.roms = json.loads(r.read().decode())
+            with urllib.request.urlopen(ROMS_JSON_URL, timeout=4) as r:
+                remote = json.loads(r.read().decode())
         except Exception:
             local = os.path.join(APP_DIR, "roms.json")
             if os.path.exists(local):
-                with open(local, encoding="utf-8") as f:
-                    self.roms = json.load(f)
-        self.rom_names = [f"{r['name']}" for r in self.roms]
+                try:
+                    with open(local, encoding="utf-8") as f:
+                        remote = json.load(f)
+                except Exception:
+                    remote = []
+        local_roms = scan_local_roms()
+        self.roms = local_roms + remote
+        self.rom_names = [r["name"] for r in self.roms]
 
         def _apply():
             self.combo.configure(values=self.rom_names)
             if self.rom_names:
                 self.combo.set(self.rom_names[0])
         self.after(0, _apply)
-        self.log(f"لائحة ROMs: {len(self.rom_names)} عنصر.")
+        self.log(f"لائحة ROMs: {len(local_roms)} محلي + {len(remote)} أونلاين.")
+
+    def extract_rom(self, src):
+        """كيجهز ROM من أرشيف ولا فولدر، وكيحدد rom_dir."""
+        if os.path.isdir(src):
+            root = find_rom_root(src)
+            self.rom_dir.set(root)
+            self.log(f"ROM واجد: {root}")
+            return
+        fname = os.path.basename(src)
+        out = os.path.join(ROMS_DIR, re.sub(ARCHIVE_RE, "", fname))
+        if os.path.isdir(out) and has_flash_script(out):
+            self.log("ROM مفكوك من قبل، غادي نستعملو.")
+        else:
+            self.log("فك الضغط (ممكن ياخد وقت)...")
+            os.makedirs(out, exist_ok=True)
+            if fname.endswith(".zip"):
+                with zipfile.ZipFile(src) as z:
+                    z.extractall(out)
+            else:
+                with tarfile.open(src, "r:*") as t:
+                    t.extractall(out)
+        root = find_rom_root(out)
+        self.rom_dir.set(root)
+        self.log(f"ROM واجد: {root}")
 
     def download_rom(self):
         url = self.url.get().strip()
-        if not url:
-            name = self.combo.get()
-            if name not in self.rom_names:
-                raise RuntimeError("اختار ROM من اللائحة ولا لصق رابط.")
-            url = self.roms[self.rom_names.index(name)]["url"]
-        fname = url.split("?")[0].rsplit("/", 1)[-1]
-        dest = os.path.join(ROMS_DIR, fname)
-        if not os.path.exists(dest):
-            self.download(url, dest)
-        self.log("فك الضغط...")
-        out = os.path.join(ROMS_DIR, re.sub(r"\.(tgz|tar\.gz|tar|zip)$", "", fname))
-        os.makedirs(out, exist_ok=True)
-        if fname.endswith(".zip"):
-            with zipfile.ZipFile(dest) as z:
-                z.extractall(out)
+        if url:
+            fname = url.split("?")[0].rsplit("/", 1)[-1]
+            dest = os.path.join(ROMS_DIR, fname)
+            if not os.path.exists(dest):
+                try:
+                    self.download(url, dest)
+                except Exception as e:
+                    raise RuntimeError(f"التحميل فشل (واش كاين انترنت؟): {e}")
+            self.extract_rom(dest)
+            return
+        name = self.combo.get()
+        if name not in self.rom_names:
+            raise RuntimeError("اختار ROM من اللائحة، ولا استعمل 'اختيار فولدر'.")
+        entry = self.roms[self.rom_names.index(name)]
+        if "path" in entry:
+            self.extract_rom(entry["path"])
         else:
-            with tarfile.open(dest, "r:*") as t:
-                t.extractall(out)
-        root = out
-        for dp, _, files in os.walk(out):
-            if "flash_all.bat" in files:
-                root = dp
-                break
-        self.rom_dir.set(root)
-        self.log(f"ROM واجد: {root}")
+            fname = entry["url"].split("?")[0].rsplit("/", 1)[-1]
+            dest = os.path.join(ROMS_DIR, fname)
+            if not os.path.exists(dest):
+                try:
+                    self.download(entry["url"], dest)
+                except Exception as e:
+                    raise RuntimeError(f"التحميل فشل (واش كاين انترنت؟): {e}")
+            self.extract_rom(dest)
 
     # ---------- تشغيل الأدوات ----------
     def run_tool(self, exe, args, cwd=None, quiet=False):
