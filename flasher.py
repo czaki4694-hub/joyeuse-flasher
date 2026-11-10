@@ -27,6 +27,22 @@ CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 os.makedirs(ROMS_DIR, exist_ok=True)
 
+DEBLOAT_LOG = os.path.join(WORK_DIR, "debloat_log.txt")
+# تطبيقات ضرورية للنظام: الأداة كترفض تعطيلها (باش مايوقعش bootloop)
+PROTECTED = {
+    "android", "com.android.systemui", "com.android.phone", "com.android.settings",
+    "com.miui.home", "com.android.providers.settings", "com.android.providers.contacts",
+    "com.android.providers.telephony", "com.android.providers.media",
+    "com.android.packageinstaller", "com.google.android.packageinstaller",
+    "com.android.server.telecom", "com.android.shell", "com.miui.securitycenter",
+}
+# اقتراحات شائعة ديال MIUI (كتختلف حسب النسخة، راجعها قبل التعطيل، والاسترجاع ممكن)
+SUGGESTED = {
+    "com.miui.analytics", "com.miui.msa.global", "com.miui.bugreport",
+    "com.miui.hybrid", "com.miui.hybrid.accessory", "com.xiaomi.mipicks",
+    "com.mi.globalbrowser", "com.miui.videoplayer", "com.miui.player",
+}
+
 
 def tool(name):
     return os.path.join(TOOLS_DIR, name + (".exe" if os.name == "nt" else ""))
@@ -44,7 +60,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Joyeuse Flasher v2 - Redmi Note 9 Pro")
-        self.geometry("760x700")
+        self.geometry("800x780")
         self.rom_dir = tk.StringVar()
         self.mode = tk.StringVar(value="flash_all.bat")
         self.url = tk.StringVar()
@@ -53,6 +69,9 @@ class App(tk.Tk):
         self.reboot_after = tk.BooleanVar(value=True)
         self.info = tk.StringVar(value="اضغط على 'قراءة المعلومات'.")
         self.roms = []
+        self.pkgs_all = []
+        self.pkg_mode = tk.StringVar(value="system")
+        self.pkg_filter = tk.StringVar()
         self.busy = False
         self._build_ui()
         self.log("مرحبا. 1) حمل الأدوات 2) حمل/اختار ROM 3) فلاش. ولا استعمل تبويب الجهاز / Recovery.")
@@ -125,6 +144,34 @@ class App(tk.Tk):
         ttk.Entry(br, textvariable=self.boot_path).pack(side="left", fill="x", expand=True, **pad)
         ttk.Button(br, text="اختيار .img", command=lambda: self.pick_img(self.boot_path)).pack(side="left", **pad)
         ttk.Button(b1, text="فلاش Boot", command=self.start_flash_boot).pack(anchor="e", **pad)
+
+        # --- تبويب التطبيقات ---
+        tab_app = ttk.Frame(nb)
+        nb.add(tab_app, text="التطبيقات")
+        a1 = ttk.LabelFrame(tab_app, text="تطبيقات الهاتف (adb - USB debugging خاصو يكون مفعل)")
+        a1.pack(fill="both", expand=True, **pad)
+        top = ttk.Frame(a1)
+        top.pack(fill="x")
+        for text, val in (("النظام", "system"), ("المثبتة", "user"), ("المحذوفة (للاسترجاع)", "removed")):
+            ttk.Radiobutton(top, text=text, variable=self.pkg_mode, value=val).pack(side="left", padx=4)
+        ttk.Button(top, text="تحميل اللائحة", command=lambda: self.run_bg(self.load_pkgs)).pack(side="left", **pad)
+        ttk.Entry(a1, textvariable=self.pkg_filter).pack(fill="x", **pad)
+        lf = ttk.Frame(a1)
+        lf.pack(fill="both", expand=True)
+        sb = ttk.Scrollbar(lf)
+        sb.pack(side="right", fill="y")
+        self.lb = tk.Listbox(lf, selectmode="extended", height=8, exportselection=False,
+                             yscrollcommand=sb.set)
+        self.lb.pack(side="left", fill="both", expand=True)
+        sb.config(command=self.lb.yview)
+        self.pkg_filter.trace_add("write", lambda *a: self.refresh_pkgs())
+        btns = ttk.Frame(a1)
+        btns.pack(fill="x")
+        ttk.Button(btns, text="تعطيل المحدد", command=self.start_debloat).pack(side="left", **pad)
+        ttk.Button(btns, text="استرجاع المحدد", command=self.start_restore).pack(side="left", **pad)
+        ttk.Button(btns, text="اقتراحات MIUI", command=self.select_suggested).pack(side="left", **pad)
+        ttk.Button(btns, text="تصدير APK", command=self.start_export).pack(side="left", **pad)
+        ttk.Button(btns, text="تثبيت APK...", command=self.start_install).pack(side="left", **pad)
 
         self.bar = ttk.Progressbar(self, mode="determinate")
         self.bar.pack(fill="x", **pad)
@@ -365,6 +412,146 @@ class App(tk.Tk):
         if then_recovery:
             self.log("Reboot لـ Recovery...")
             self.fb(["reboot", "recovery"])
+
+    # ---------- التطبيقات (Debloat / APK) ----------
+    def require_adb(self):
+        self.ensure_tools()
+        _, out = self.adb(["devices"], quiet=True)
+        if "unauthorized" in out:
+            raise RuntimeError("الهاتف ما واففش على الحاسوب. شوف الشاشة وقبل 'Allow USB debugging'.")
+        if not re.search(r"\tdevice\b", out):
+            raise RuntimeError("ما لقيت هاتف عبر adb. شغل الهاتف وفعل USB debugging.")
+
+    def pkg_list(self, flags):
+        _, out = self.adb(["shell", "pm", "list", "packages"] + flags, quiet=True)
+        return {l.split(":", 1)[1].strip() for l in out.splitlines() if l.startswith("package:")}
+
+    def load_pkgs(self):
+        self.require_adb()
+        mode = self.pkg_mode.get()
+        if mode == "system":
+            pk = self.pkg_list(["-s"])
+        elif mode == "user":
+            pk = self.pkg_list(["-3"])
+        else:
+            pk = self.pkg_list(["-u"]) - self.pkg_list([])
+        self.pkgs_all = sorted(pk)
+        self.after(0, self.refresh_pkgs)
+        self.log(f"{len(pk)} تطبيق ({mode}).")
+
+    def refresh_pkgs(self):
+        q = self.pkg_filter.get().strip().lower()
+        self.lb.delete(0, "end")
+        for p in self.pkgs_all:
+            if q in p.lower():
+                self.lb.insert("end", p)
+
+    def selected_pkgs(self):
+        return [self.lb.get(i) for i in self.lb.curselection()]
+
+    def select_suggested(self):
+        self.lb.selection_clear(0, "end")
+        n = 0
+        for i in range(self.lb.size()):
+            if self.lb.get(i) in SUGGESTED:
+                self.lb.selection_set(i)
+                n += 1
+        self.log(f"تم تحديد {n} تطبيق من الاقتراحات الشائعة (حمل لائحة 'النظام' قبل). راجعهم قبل التعطيل.")
+
+    def start_debloat(self):
+        sel = self.selected_pkgs()
+        if not sel:
+            messagebox.showinfo("تنبيه", "اختار تطبيق واحد على الأقل.")
+            return
+        if self.pkg_mode.get() == "removed":
+            messagebox.showinfo("تنبيه", "هاد اللائحة ديال المحذوفة. استعمل 'استرجاع المحدد'.")
+            return
+        bad = [p for p in sel if p in PROTECTED]
+        if bad:
+            messagebox.showerror("ممنوع", "هاد التطبيقات ضرورية للنظام:\n" + "\n".join(bad))
+            return
+        if not messagebox.askyesno(
+                "تأكيد", f"غادي يتعطل {len(sel)} تطبيق (للمستخدم الحالي).\n"
+                         "تقدر ترجعهم من 'استرجاع المحدد'.\nواش كمل؟"):
+            return
+        self.run_bg(lambda: self.do_debloat(sel))
+
+    def do_debloat(self, pkgs):
+        self.require_adb()
+        ok = []
+        for i, p in enumerate(pkgs, 1):
+            _, out = self.adb(["shell", "pm", "uninstall", "-k", "--user", "0", p], quiet=True)
+            good = "Success" in out
+            self.log(f"[{i}/{len(pkgs)}] {p}: " + ("تم" if good else "فشل - " + out.strip()))
+            if good:
+                ok.append(p)
+            self.set_progress(i * 100 / len(pkgs))
+        if ok:
+            with open(DEBLOAT_LOG, "a", encoding="utf-8") as f:
+                f.write("\n".join(ok) + "\n")
+        self.log(f"تعطل {len(ok)}/{len(pkgs)}. اللائحة محفوظة فـ {DEBLOAT_LOG}")
+        self.set_progress(0)
+        self.load_pkgs()
+
+    def start_restore(self):
+        sel = self.selected_pkgs()
+        if not sel:
+            messagebox.showinfo("تنبيه", "اختار تطبيق واحد على الأقل (من لائحة 'المحذوفة').")
+            return
+        self.run_bg(lambda: self.do_restore(sel))
+
+    def do_restore(self, pkgs):
+        self.require_adb()
+        n = 0
+        for i, p in enumerate(pkgs, 1):
+            _, out = self.adb(["shell", "cmd", "package", "install-existing", p], quiet=True)
+            good = "installed" in out.lower()
+            self.log(f"[{i}/{len(pkgs)}] {p}: " + ("رجع" if good else "فشل - " + out.strip()))
+            n += good
+            self.set_progress(i * 100 / len(pkgs))
+        self.log(f"رجع {n}/{len(pkgs)}.")
+        self.set_progress(0)
+        self.load_pkgs()
+
+    def start_export(self):
+        sel = self.selected_pkgs()
+        if not sel:
+            messagebox.showinfo("تنبيه", "اختار تطبيق واحد على الأقل.")
+            return
+        dest = filedialog.askdirectory(title="فين تحفظ ملفات APK؟")
+        if dest:
+            self.run_bg(lambda: self.do_export(sel, dest))
+
+    def do_export(self, pkgs, dest):
+        self.require_adb()
+        for i, p in enumerate(pkgs, 1):
+            _, out = self.adb(["shell", "pm", "path", p], quiet=True)
+            paths = [l.split(":", 1)[1].strip() for l in out.splitlines() if l.startswith("package:")]
+            if not paths:
+                self.log(f"{p}: ما لقيت APK")
+                continue
+            d = os.path.join(dest, p)
+            os.makedirs(d, exist_ok=True)
+            for path in paths:
+                self.adb(["pull", path, d])
+            self.set_progress(i * 100 / len(pkgs))
+        self.log(f"تم التصدير فـ {dest}")
+        self.set_progress(0)
+
+    def start_install(self):
+        files = filedialog.askopenfilenames(filetypes=[("APK", "*.apk")])
+        if files:
+            self.run_bg(lambda: self.do_install(list(files)))
+
+    def do_install(self, files):
+        self.require_adb()
+        for i, f in enumerate(files, 1):
+            self.log(f"[{i}/{len(files)}] تثبيت {os.path.basename(f)}")
+            _, out = self.adb(["install", "-r", f])
+            if "Success" not in out:
+                self.log("فشل التثبيت (الملفات split/.apks/.xapk ما مدعومينش).")
+            self.set_progress(i * 100 / len(files))
+        self.set_progress(0)
 
     # ---------- فلاش ROM ----------
     def start_flash(self):
