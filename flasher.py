@@ -134,7 +134,7 @@ class App(ctk.CTk):
     def __init__(self):
         ctk.set_appearance_mode("light")
         super().__init__()
-        self.title("Joyeuse Flasher (Offline) - Redmi Note 9 Pro")
+        self.title("Joyeuse Flasher - Redmi Note 9 Pro")
         self.geometry("920x840")
         self.minsize(860, 720)
 
@@ -159,9 +159,7 @@ class App(ctk.CTk):
         self.pkg_filter = tk.StringVar()
         self.busy = False
         self._build_ui()
-        self.log("مرحبا (Offline). 1) جهز الأدوات 2) اختار ROM محلي ولا فولدر 3) فلاش.")
-        self.log(f"platform-tools: {find_tools_dir()}")
-        self.log(f"فولدر ROMs: {os.path.join(APP_DIR, 'roms')}")
+        self.log("مرحبا. 1) حمل الأدوات 2) حمل/اختار ROM 3) فلاش. ولا استعمل التبويبات الأخرى.")
         threading.Thread(target=self.load_rom_list, daemon=True).start()
 
     # ---------- مكونات الواجهة ----------
@@ -203,7 +201,7 @@ class App(ctk.CTk):
         left = ctk.CTkFrame(header, fg_color="transparent")
         left.pack(side="left")
         ctk.CTkLabel(left, text="Joyeuse Flasher", font=self.f_title, text_color=ACCENT).pack(anchor="w")
-        ctk.CTkLabel(left, text="Redmi Note 9 Pro  •  joyeuse  •  Offline", font=self.f_small,
+        ctk.CTkLabel(left, text="Redmi Note 9 Pro  •  joyeuse", font=self.f_small,
                      text_color=MUTED).pack(anchor="w")
         self.theme_switch = ctk.CTkSwitch(header, text="داكن", command=self.toggle_theme,
                                           progress_color=ACCENT, font=self.f_body, text_color=TEXT)
@@ -237,25 +235,20 @@ class App(ctk.CTk):
         self.style_listbox()
 
     def _tab_rom(self, t):
-        c = self.card(t, "1) الأدوات",
-                      "كتقلب على platform-tools محلياً (فولدر platform-tools بجنب الأداة ولا ملف zip). "
-                      "الانترنت غير احتياطي.")
+        c = self.card(t, "1) الأدوات", "كتحمل adb وfastboot من Google مرة وحدة.")
         r = self.row(c)
-        self.button(r, "تجهيز platform-tools", lambda: self.run_bg(self.get_tools), width=170).pack(side="left", padx=(0, 8))
+        self.button(r, "تحميل platform-tools", lambda: self.run_bg(self.get_tools), width=170).pack(side="left", padx=(0, 8))
         self.button(r, "كشف الهاتف", lambda: self.run_bg(self.detect), "soft").pack(side="left")
 
-        c = self.card(t, "2) ROM",
-                      "اختار ROM محلي من اللائحة، ولا حدد الفولدر مباشرة (فيه flash_all.bat).")
+        c = self.card(t, "2) ROM", "اختار من اللائحة ولا لصق رابط Fastboot ROM، ومن بعد حدد الفولدر.")
         self.combo = ctk.CTkComboBox(c, values=[], state="readonly", height=34, corner_radius=8,
                                      font=self.f_body, dropdown_font=self.f_body,
                                      button_color=ACCENT, button_hover_color=ACCENT_HOVER)
-        self.combo.set("ما لقيت حتى ROM محلي: استعمل 'اختيار فولدر'")
+        self.combo.set("اللائحة فارغة: لصق رابط تحت")
         self.combo.pack(fill="x", pady=3)
         r = self.row(c)
-        self.entry(r, self.url, "رابط ROM (اختياري، كيحتاج انترنت)").pack(side="left", fill="x", expand=True, padx=(0, 8))
-        self.button(r, "تجهيز ROM", lambda: self.run_bg(self.download_rom)).pack(side="left", padx=(0, 6))
-        self.button(r, "تحديث اللائحة", lambda: threading.Thread(target=self.load_rom_list, daemon=True).start(),
-                    "soft", width=110).pack(side="left")
+        self.entry(r, self.url, "رابط ROM (.tgz / .zip)").pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.button(r, "تحميل ROM", lambda: self.run_bg(self.download_rom)).pack(side="left")
         r = self.row(c)
         self.entry(r, self.rom_dir, "فولدر ROM (فيه flash_all.bat)").pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.button(r, "اختيار فولدر", self.pick_dir, "soft").pack(side="left")
@@ -452,7 +445,7 @@ class App(ctk.CTk):
             if self.rom_names:
                 self.combo.set(self.rom_names[0])
         self.after(0, _apply)
-        self.log(f"لائحة ROMs: {len(local_roms)} محلي + {len(remote)} أونلاين.")
+        self.log(f"لائحة ROMs: {len(self.rom_names)} عنصر.")
 
     def extract_rom(self, src):
         """كيجهز ROM من أرشيف ولا فولدر، وكيحدد rom_dir."""
