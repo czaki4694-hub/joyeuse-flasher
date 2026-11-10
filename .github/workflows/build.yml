@@ -15,9 +15,9 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install pyinstaller
+      - run: pip install pyinstaller customtkinter
 
-      - run: pyinstaller --onefile --windowed --name JoyeuseFlasher flasher.py
+      - run: pyinstaller --onefile --windowed --collect-all customtkinter --name JoyeuseFlasher flasher.py
 
       - uses: actions/upload-artifact@v4
         with:
