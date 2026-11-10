@@ -1,8 +1,9 @@
-"""Joyeuse Flasher v2 - أداة لـ Redmi Note 9 Pro (joyeuse) بالـ fastboot وadb.
+"""Joyeuse Flasher v3 - Redmi Note 9 Pro (joyeuse) بواجهة عصرية (CustomTkinter).
 
 - كتحمل platform-tools من Google أوتوماتيكيا
 - كتحمل Fastboot ROM من لائحة roms.json (أو من رابط تلصقو) وكتفلاشيه
-- معلومات الجهاز، أزرار Reboot، فلاش Recovery وBoot (Magisk)
+- معلومات الجهاز، Reboot، فلاش Recovery وBoot (Magisk)
+- تبويب التطبيقات: Debloat مع استرجاع، تثبيت وتصدير APK
 """
 import json
 import os
@@ -15,7 +16,8 @@ import threading
 import urllib.request
 import zipfile
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
+from tkinter import filedialog, messagebox
+import customtkinter as ctk
 
 APP_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 WORK_DIR = os.path.join(APP_DIR, "joyeuse_data")
@@ -43,6 +45,22 @@ SUGGESTED = {
     "com.mi.globalbrowser", "com.miui.videoplayer", "com.miui.player",
 }
 
+# ---------- الألوان (فاتح, داكن) ----------
+# باش تبدل اللون الرئيسي: عدل ACCENT و ACCENT_HOVER (مثلا أزرق: #2F6FED / #2459C4)
+ACCENT = "#FF6900"
+ACCENT_HOVER = "#E05D00"
+DANGER = "#D93025"
+DANGER_HOVER = "#B3261E"
+BG = ("#F4F5F7", "#18191B")
+CARD = ("#FFFFFF", "#202124")
+INNER = ("#F6F7F9", "#2A2C30")
+SOFT = ("#E9ECF0", "#34373C")
+SOFT_HOVER = ("#DCE0E6", "#42464C")
+TEXT = ("#1F2328", "#ECEFF4")
+MUTED = ("#6B7280", "#9AA0A6")
+FONT = "Segoe UI"
+MONO = "Consolas"
+
 
 def tool(name):
     return os.path.join(TOOLS_DIR, name + (".exe" if os.name == "nt" else ""))
@@ -56,11 +74,20 @@ def adb_exe():
     return tool("adb")
 
 
-class App(tk.Tk):
+class App(ctk.CTk):
     def __init__(self):
+        ctk.set_appearance_mode("light")
         super().__init__()
-        self.title("Joyeuse Flasher v2 - Redmi Note 9 Pro")
-        self.geometry("800x780")
+        self.title("Joyeuse Flasher - Redmi Note 9 Pro")
+        self.geometry("920x840")
+        self.minsize(860, 720)
+
+        self.f_title = ctk.CTkFont(family=FONT, size=24, weight="bold")
+        self.f_head = ctk.CTkFont(family=FONT, size=15, weight="bold")
+        self.f_body = ctk.CTkFont(family=FONT, size=13)
+        self.f_small = ctk.CTkFont(family=FONT, size=12)
+        self.f_mono = ctk.CTkFont(family=MONO, size=12)
+
         self.rom_dir = tk.StringVar()
         self.mode = tk.StringVar(value="flash_all.bat")
         self.url = tk.StringVar()
@@ -68,126 +95,194 @@ class App(tk.Tk):
         self.boot_path = tk.StringVar()
         self.reboot_after = tk.BooleanVar(value=True)
         self.info = tk.StringVar(value="اضغط على 'قراءة المعلومات'.")
+        self.status = tk.StringVar(value="الهاتف: غير مكشوف")
         self.roms = []
+        self.rom_names = []
         self.pkgs_all = []
         self.pkg_mode = tk.StringVar(value="system")
         self.pkg_filter = tk.StringVar()
         self.busy = False
         self._build_ui()
-        self.log("مرحبا. 1) حمل الأدوات 2) حمل/اختار ROM 3) فلاش. ولا استعمل تبويب الجهاز / Recovery.")
+        self.log("مرحبا. 1) حمل الأدوات 2) حمل/اختار ROM 3) فلاش. ولا استعمل التبويبات الأخرى.")
         threading.Thread(target=self.load_rom_list, daemon=True).start()
 
-    # ---------- UI ----------
+    # ---------- مكونات الواجهة ----------
+    def button(self, parent, text, command, kind="primary", width=140):
+        colors = {
+            "primary": dict(fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="white"),
+            "danger": dict(fg_color=DANGER, hover_color=DANGER_HOVER, text_color="white"),
+            "soft": dict(fg_color=SOFT, hover_color=SOFT_HOVER, text_color=TEXT),
+        }[kind]
+        return ctk.CTkButton(parent, text=text, command=command, width=width, height=34,
+                             corner_radius=8, font=self.f_body, **colors)
+
+    def entry(self, parent, var, placeholder=""):
+        return ctk.CTkEntry(parent, textvariable=var, placeholder_text=placeholder, height=34,
+                            corner_radius=8, font=self.f_body)
+
+    def row(self, parent):
+        r = ctk.CTkFrame(parent, fg_color="transparent")
+        r.pack(fill="x", pady=3)
+        return r
+
+    def card(self, parent, title, hint=None, expand=False):
+        box = ctk.CTkFrame(parent, corner_radius=12, fg_color=INNER)
+        box.pack(fill="both" if expand else "x", expand=expand, padx=6, pady=6)
+        ctk.CTkLabel(box, text=title, font=self.f_head, text_color=TEXT).pack(anchor="w", padx=14, pady=(10, 0))
+        if hint:
+            ctk.CTkLabel(box, text=hint, font=self.f_small, text_color=MUTED, wraplength=760,
+                         justify="left").pack(anchor="w", padx=14)
+        body = ctk.CTkFrame(box, fg_color="transparent")
+        body.pack(fill="both" if expand else "x", expand=expand, padx=12, pady=(6, 12))
+        return body
+
     def _build_ui(self):
-        pad = {"padx": 8, "pady": 4}
-        nb = ttk.Notebook(self)
-        nb.pack(fill="x", **pad)
-        tab_rom = ttk.Frame(nb)
-        tab_dev = ttk.Frame(nb)
-        tab_img = ttk.Frame(nb)
-        nb.add(tab_rom, text="ROM")
-        nb.add(tab_dev, text="الجهاز")
-        nb.add(tab_img, text="Recovery / Boot")
+        self.configure(fg_color=BG)
 
-        # --- تبويب ROM ---
-        f1 = ttk.LabelFrame(tab_rom, text="1) الأدوات")
-        f1.pack(fill="x", **pad)
-        ttk.Button(f1, text="تحميل platform-tools", command=lambda: self.run_bg(self.get_tools)).pack(side="left", **pad)
-        ttk.Button(f1, text="كشف الهاتف", command=lambda: self.run_bg(self.detect)).pack(side="left", **pad)
+        # --- رأس الصفحة ---
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(fill="x", padx=18, pady=(14, 4))
+        left = ctk.CTkFrame(header, fg_color="transparent")
+        left.pack(side="left")
+        ctk.CTkLabel(left, text="Joyeuse Flasher", font=self.f_title, text_color=ACCENT).pack(anchor="w")
+        ctk.CTkLabel(left, text="Redmi Note 9 Pro  •  joyeuse", font=self.f_small,
+                     text_color=MUTED).pack(anchor="w")
+        self.theme_switch = ctk.CTkSwitch(header, text="داكن", command=self.toggle_theme,
+                                          progress_color=ACCENT, font=self.f_body, text_color=TEXT)
+        self.theme_switch.pack(side="right")
+        ctk.CTkLabel(header, textvariable=self.status, font=self.f_small,
+                     text_color=MUTED).pack(side="right", padx=16)
 
-        f2 = ttk.LabelFrame(tab_rom, text="2) ROM")
-        f2.pack(fill="x", **pad)
-        self.combo = ttk.Combobox(f2, state="readonly", width=70)
-        self.combo.pack(fill="x", **pad)
-        row = ttk.Frame(f2)
-        row.pack(fill="x")
-        ttk.Entry(row, textvariable=self.url).pack(side="left", fill="x", expand=True, **pad)
-        ttk.Button(row, text="حمل (من اللائحة/الرابط)", command=lambda: self.run_bg(self.download_rom)).pack(side="left", **pad)
-        row2 = ttk.Frame(f2)
-        row2.pack(fill="x")
-        ttk.Entry(row2, textvariable=self.rom_dir).pack(side="left", fill="x", expand=True, **pad)
-        ttk.Button(row2, text="اختيار فولدر ROM", command=self.pick_dir).pack(side="left", **pad)
+        # --- السجل والتقدم (تحت) ---
+        self.log_box = ctk.CTkTextbox(self, height=150, font=self.f_mono, corner_radius=10,
+                                      fg_color=CARD, text_color=TEXT)
+        self.log_box.pack(side="bottom", fill="x", padx=18, pady=(4, 14))
+        self.log_box.configure(state="disabled")
+        self.bar = ctk.CTkProgressBar(self, height=8, progress_color=ACCENT)
+        self.bar.set(0)
+        self.bar.pack(side="bottom", fill="x", padx=18, pady=4)
 
-        f3 = ttk.LabelFrame(tab_rom, text="3) الفلاش")
-        f3.pack(fill="x", **pad)
-        ttk.Radiobutton(f3, text="Clean all (كيمسح كلشي)", variable=self.mode, value="flash_all.bat").pack(anchor="w", padx=8)
-        ttk.Radiobutton(f3, text="Save user data (كيحافظ على الداتا)", variable=self.mode, value="flash_all_except_storage.bat").pack(anchor="w", padx=8)
-        ttk.Button(f3, text="ابدأ الفلاش", command=self.start_flash).pack(anchor="e", **pad)
+        # --- التبويبات ---
+        self.tabs = ctk.CTkTabview(
+            self, fg_color=CARD, corner_radius=14,
+            segmented_button_selected_color=ACCENT,
+            segmented_button_selected_hover_color=ACCENT_HOVER,
+            segmented_button_unselected_color=SOFT,
+            segmented_button_unselected_hover_color=SOFT_HOVER,
+            text_color=TEXT)
+        self.tabs.pack(fill="both", expand=True, padx=14, pady=6)
 
-        # --- تبويب الجهاز ---
-        d1 = ttk.LabelFrame(tab_dev, text="معلومات الجهاز")
-        d1.pack(fill="x", **pad)
-        ttk.Button(d1, text="قراءة المعلومات", command=lambda: self.run_bg(self.device_info)).pack(anchor="w", **pad)
-        ttk.Label(d1, textvariable=self.info, justify="left", font=("Consolas", 10)).pack(anchor="w", **pad)
+        self._tab_rom(self.tabs.add("ROM"))
+        self._tab_device(self.tabs.add("الجهاز"))
+        self._tab_images(self.tabs.add("Recovery / Boot"))
+        self._tab_apps(self.tabs.add("التطبيقات"))
+        self.style_listbox()
 
-        d2 = ttk.LabelFrame(tab_dev, text="Reboot (كيخدم فـ Fastboot وفـ Android)")
-        d2.pack(fill="x", **pad)
-        ttk.Button(d2, text="Reboot System", command=lambda: self.run_bg(lambda: self.reboot("system"))).pack(side="left", **pad)
-        ttk.Button(d2, text="Reboot Recovery", command=lambda: self.run_bg(lambda: self.reboot("recovery"))).pack(side="left", **pad)
-        ttk.Button(d2, text="Reboot Fastboot", command=lambda: self.run_bg(lambda: self.reboot("bootloader"))).pack(side="left", **pad)
+    def _tab_rom(self, t):
+        c = self.card(t, "1) الأدوات", "كتحمل adb وfastboot من Google مرة وحدة.")
+        r = self.row(c)
+        self.button(r, "تحميل platform-tools", lambda: self.run_bg(self.get_tools), width=170).pack(side="left", padx=(0, 8))
+        self.button(r, "كشف الهاتف", lambda: self.run_bg(self.detect), "soft").pack(side="left")
 
-        # --- تبويب Recovery / Boot ---
-        r1 = ttk.LabelFrame(tab_img, text="فلاش Recovery (TWRP / OrangeFox...)")
-        r1.pack(fill="x", **pad)
-        rr = ttk.Frame(r1)
-        rr.pack(fill="x")
-        ttk.Entry(rr, textvariable=self.recovery_path).pack(side="left", fill="x", expand=True, **pad)
-        ttk.Button(rr, text="اختيار .img", command=lambda: self.pick_img(self.recovery_path)).pack(side="left", **pad)
-        ttk.Checkbutton(r1, text="Reboot مباشرة لـ Recovery بعد الفلاش (مهم باش مايرجعش الـ stock recovery)",
-                        variable=self.reboot_after).pack(anchor="w", padx=8)
-        ttk.Button(r1, text="فلاش Recovery", command=self.start_flash_recovery).pack(anchor="e", **pad)
+        c = self.card(t, "2) ROM", "اختار من اللائحة ولا لصق رابط Fastboot ROM، ومن بعد حدد الفولدر.")
+        self.combo = ctk.CTkComboBox(c, values=[], state="readonly", height=34, corner_radius=8,
+                                     font=self.f_body, dropdown_font=self.f_body,
+                                     button_color=ACCENT, button_hover_color=ACCENT_HOVER)
+        self.combo.set("اللائحة فارغة: لصق رابط تحت")
+        self.combo.pack(fill="x", pady=3)
+        r = self.row(c)
+        self.entry(r, self.url, "رابط ROM (.tgz / .zip)").pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.button(r, "تحميل ROM", lambda: self.run_bg(self.download_rom)).pack(side="left")
+        r = self.row(c)
+        self.entry(r, self.rom_dir, "فولدر ROM (فيه flash_all.bat)").pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.button(r, "اختيار فولدر", self.pick_dir, "soft").pack(side="left")
 
-        b1 = ttk.LabelFrame(tab_img, text="فلاش Boot (boot.img معدل ديال Magisk)")
-        b1.pack(fill="x", **pad)
-        br = ttk.Frame(b1)
-        br.pack(fill="x")
-        ttk.Entry(br, textvariable=self.boot_path).pack(side="left", fill="x", expand=True, **pad)
-        ttk.Button(br, text="اختيار .img", command=lambda: self.pick_img(self.boot_path)).pack(side="left", **pad)
-        ttk.Button(b1, text="فلاش Boot", command=self.start_flash_boot).pack(anchor="e", **pad)
+        c = self.card(t, "3) الفلاش")
+        ctk.CTkRadioButton(c, text="Clean all (كيمسح كلشي)", variable=self.mode, value="flash_all.bat",
+                           fg_color=ACCENT, hover_color=ACCENT_HOVER, font=self.f_body,
+                           text_color=TEXT).pack(anchor="w", pady=3)
+        ctk.CTkRadioButton(c, text="Save user data (كيحافظ على الداتا)", variable=self.mode,
+                           value="flash_all_except_storage.bat", fg_color=ACCENT,
+                           hover_color=ACCENT_HOVER, font=self.f_body, text_color=TEXT).pack(anchor="w", pady=3)
+        self.button(c, "ابدأ الفلاش", self.start_flash, "danger", width=170).pack(anchor="e", pady=(6, 0))
 
-        # --- تبويب التطبيقات ---
-        tab_app = ttk.Frame(nb)
-        nb.add(tab_app, text="التطبيقات")
-        a1 = ttk.LabelFrame(tab_app, text="تطبيقات الهاتف (adb - USB debugging خاصو يكون مفعل)")
-        a1.pack(fill="both", expand=True, **pad)
-        top = ttk.Frame(a1)
-        top.pack(fill="x")
+    def _tab_device(self, t):
+        c = self.card(t, "معلومات الجهاز", "كتخدم والهاتف فـ Fastboot ولا فـ Android (USB debugging).")
+        self.button(c, "قراءة المعلومات", lambda: self.run_bg(self.device_info), width=170).pack(anchor="w", pady=(0, 6))
+        ctk.CTkLabel(c, textvariable=self.info, justify="left", anchor="w", font=self.f_mono,
+                     text_color=TEXT).pack(anchor="w", fill="x")
+
+        c = self.card(t, "Reboot", "كيخدم فـ Fastboot وفـ Android.")
+        r = self.row(c)
+        self.button(r, "Reboot System", lambda: self.run_bg(lambda: self.reboot("system")), "soft").pack(side="left", padx=(0, 8))
+        self.button(r, "Reboot Recovery", lambda: self.run_bg(lambda: self.reboot("recovery")), "soft").pack(side="left", padx=(0, 8))
+        self.button(r, "Reboot Fastboot", lambda: self.run_bg(lambda: self.reboot("bootloader")), "soft").pack(side="left")
+
+    def _tab_images(self, t):
+        c = self.card(t, "فلاش Recovery (TWRP / OrangeFox...)", "خاص الملف يكون ديال joyeuse بالضبط.")
+        r = self.row(c)
+        self.entry(r, self.recovery_path, "ملف recovery.img").pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.button(r, "اختيار .img", lambda: self.pick_img(self.recovery_path), "soft").pack(side="left")
+        ctk.CTkCheckBox(c, text="Reboot مباشرة لـ Recovery بعد الفلاش (باش مايرجعش الـ stock recovery)",
+                        variable=self.reboot_after, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                        font=self.f_body, text_color=TEXT).pack(anchor="w", pady=4)
+        self.button(c, "فلاش Recovery", self.start_flash_recovery, "danger", width=170).pack(anchor="e")
+
+        c = self.card(t, "فلاش Boot (boot.img معدل ديال Magisk)")
+        r = self.row(c)
+        self.entry(r, self.boot_path, "ملف boot.img").pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.button(r, "اختيار .img", lambda: self.pick_img(self.boot_path), "soft").pack(side="left")
+        self.button(c, "فلاش Boot", self.start_flash_boot, "danger", width=170).pack(anchor="e", pady=(6, 0))
+
+    def _tab_apps(self, t):
+        c = self.card(t, "تطبيقات الهاتف", "كيخدم عبر adb: فعل USB debugging وقبل الطلب فشاشة الهاتف.", expand=True)
+        top = ctk.CTkFrame(c, fg_color="transparent")
+        top.pack(fill="x", pady=(0, 4))
         for text, val in (("النظام", "system"), ("المثبتة", "user"), ("المحذوفة (للاسترجاع)", "removed")):
-            ttk.Radiobutton(top, text=text, variable=self.pkg_mode, value=val).pack(side="left", padx=4)
-        ttk.Button(top, text="تحميل اللائحة", command=lambda: self.run_bg(self.load_pkgs)).pack(side="left", **pad)
-        ttk.Entry(a1, textvariable=self.pkg_filter).pack(fill="x", **pad)
-        lf = ttk.Frame(a1)
+            ctk.CTkRadioButton(top, text=text, variable=self.pkg_mode, value=val, fg_color=ACCENT,
+                               hover_color=ACCENT_HOVER, font=self.f_body,
+                               text_color=TEXT).pack(side="left", padx=(0, 14))
+        self.button(top, "تحميل اللائحة", lambda: self.run_bg(self.load_pkgs), width=130).pack(side="right")
+        self.entry(c, self.pkg_filter, "بحث...").pack(fill="x", pady=4)
+        lf = ctk.CTkFrame(c, fg_color="transparent")
         lf.pack(fill="both", expand=True)
-        sb = ttk.Scrollbar(lf)
+        sb = ctk.CTkScrollbar(lf)
         sb.pack(side="right", fill="y")
         self.lb = tk.Listbox(lf, selectmode="extended", height=8, exportselection=False,
-                             yscrollcommand=sb.set)
+                             yscrollcommand=sb.set, activestyle="none")
         self.lb.pack(side="left", fill="both", expand=True)
-        sb.config(command=self.lb.yview)
+        sb.configure(command=self.lb.yview)
         self.pkg_filter.trace_add("write", lambda *a: self.refresh_pkgs())
-        btns = ttk.Frame(a1)
-        btns.pack(fill="x")
-        ttk.Button(btns, text="تعطيل المحدد", command=self.start_debloat).pack(side="left", **pad)
-        ttk.Button(btns, text="استرجاع المحدد", command=self.start_restore).pack(side="left", **pad)
-        ttk.Button(btns, text="اقتراحات MIUI", command=self.select_suggested).pack(side="left", **pad)
-        ttk.Button(btns, text="تصدير APK", command=self.start_export).pack(side="left", **pad)
-        ttk.Button(btns, text="تثبيت APK...", command=self.start_install).pack(side="left", **pad)
+        r = self.row(c)
+        self.button(r, "تعطيل المحدد", self.start_debloat, "danger", width=120).pack(side="left", padx=(0, 6))
+        self.button(r, "استرجاع المحدد", self.start_restore, "soft", width=120).pack(side="left", padx=(0, 6))
+        self.button(r, "اقتراحات MIUI", self.select_suggested, "soft", width=120).pack(side="left", padx=(0, 6))
+        self.button(r, "تصدير APK", self.start_export, "soft", width=110).pack(side="left", padx=(0, 6))
+        self.button(r, "تثبيت APK...", self.start_install, "soft", width=110).pack(side="left")
 
-        self.bar = ttk.Progressbar(self, mode="determinate")
-        self.bar.pack(fill="x", **pad)
-        self.txt = scrolledtext.ScrolledText(self, height=12, state="disabled")
-        self.txt.pack(fill="both", expand=True, **pad)
+    def style_listbox(self):
+        dark = ctk.get_appearance_mode() == "Dark"
+        self.lb.configure(bg="#2A2C30" if dark else "#FFFFFF", fg="#ECEFF4" if dark else "#1F2328",
+                          selectbackground=ACCENT, selectforeground="white",
+                          highlightthickness=0, borderwidth=0, font=(MONO, 10))
+
+    def toggle_theme(self):
+        ctk.set_appearance_mode("dark" if self.theme_switch.get() else "light")
+        self.style_listbox()
+
+    def set_status(self, text):
+        self.after(0, lambda: self.status.set(text))
 
     def log(self, msg):
         def _w():
-            self.txt.configure(state="normal")
-            self.txt.insert("end", msg + "\n")
-            self.txt.see("end")
-            self.txt.configure(state="disabled")
+            self.log_box.configure(state="normal")
+            self.log_box.insert("end", msg + "\n")
+            self.log_box.see("end")
+            self.log_box.configure(state="disabled")
         self.after(0, _w)
 
     def set_progress(self, v):
-        self.after(0, lambda: self.bar.configure(value=v))
+        self.after(0, lambda: self.bar.set(max(0, min(1, v / 100))))
 
     def pick_dir(self):
         d = filedialog.askdirectory()
@@ -217,7 +312,7 @@ class App(tk.Tk):
     # ---------- download helpers ----------
     def download(self, url, dest):
         self.log(f"تحميل: {url}")
-        req = urllib.request.Request(url, headers={"User-Agent": "JoyeuseFlasher/2.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "JoyeuseFlasher/3.0"})
         with urllib.request.urlopen(req) as r, open(dest, "wb") as f:
             total = int(r.headers.get("Content-Length", 0))
             done = 0
@@ -256,19 +351,22 @@ class App(tk.Tk):
             if os.path.exists(local):
                 with open(local, encoding="utf-8") as f:
                     self.roms = json.load(f)
-        names = [f"{r['name']}" for r in self.roms]
-        self.after(0, lambda: self.combo.configure(values=names))
-        if names:
-            self.after(0, lambda: self.combo.current(0))
-        self.log(f"لائحة ROMs: {len(names)} عنصر.")
+        self.rom_names = [f"{r['name']}" for r in self.roms]
+
+        def _apply():
+            self.combo.configure(values=self.rom_names)
+            if self.rom_names:
+                self.combo.set(self.rom_names[0])
+        self.after(0, _apply)
+        self.log(f"لائحة ROMs: {len(self.rom_names)} عنصر.")
 
     def download_rom(self):
         url = self.url.get().strip()
         if not url:
-            i = self.combo.current()
-            if i < 0:
+            name = self.combo.get()
+            if name not in self.rom_names:
                 raise RuntimeError("اختار ROM من اللائحة ولا لصق رابط.")
-            url = self.roms[i]["url"]
+            url = self.roms[self.rom_names.index(name)]["url"]
         fname = url.split("?")[0].rsplit("/", 1)[-1]
         dest = os.path.join(ROMS_DIR, fname)
         if not os.path.exists(dest):
@@ -338,10 +436,12 @@ class App(tk.Tk):
     def detect(self):
         self.ensure_tools()
         if not self.fastboot_present():
+            self.set_status("الهاتف: ما كاينش")
             self.log("ما لقيت حتى هاتف. دخل الهاتف لـ Fastboot (Vol- + Power) وركب الكابل.")
             return
         prod = self.getvar("product")
         unl = self.getvar("unlocked")
+        self.set_status(f"Fastboot • {prod} • unlocked: {unl}")
         self.log(f"product: {prod} | unlocked: {unl}")
         if "joyeuse" not in prod.lower():
             self.log("تحذير: الهاتف ماشي joyeuse!")
@@ -355,6 +455,7 @@ class App(tk.Tk):
             lines.append("الوضع: Fastboot")
             for k in ("product", "unlocked", "anti", "version-bootloader", "serialno", "secure"):
                 lines.append(f"{k}: {self.getvar(k)}")
+            self.set_status("الهاتف: Fastboot")
         elif self.adb_present():
             lines.append("الوضع: Android (adb)")
             props = [("الموديل", "ro.product.model"), ("الاسم الداخلي", "ro.product.device"),
@@ -363,9 +464,11 @@ class App(tk.Tk):
             for label, prop in props:
                 _, out = self.adb(["shell", "getprop", prop], quiet=True)
                 lines.append(f"{label}: {out.strip() or '?'}")
+            self.set_status("الهاتف: Android (adb)")
         else:
             lines.append("ما لقيت حتى هاتف.")
             lines.append("Fastboot: Vol- + Power. Android: فعل USB debugging ووافق على الحاسوب.")
+            self.set_status("الهاتف: ما كاينش")
         text = "\n".join(lines)
         self.after(0, lambda: self.info.set(text))
         self.log("تمت قراءة المعلومات.")
