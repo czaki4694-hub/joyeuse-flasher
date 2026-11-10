@@ -23,7 +23,7 @@ TOOLS_DIR = os.path.join(WORK_DIR, "platform-tools")
 ROMS_DIR = os.path.join(WORK_DIR, "roms")
 PT_URL = "https://dl.google.com/android/repository/platform-tools-latest-windows.zip"
 # لائحة ROMs كتتحدث من GitHub بلا ما تعاود تبني exe. بدل USER/REPO ديالك.
-ROMS_JSON_URL = "https://raw.githubusercontent.com/USER/REPO/main/roms.json"
+ROMS_JSON_URL = "https://raw.githubusercontent.com/czaki4694-hub/joyeuse-flasher/main/roms.json"
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 os.makedirs(ROMS_DIR, exist_ok=True)
