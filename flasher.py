@@ -82,4 +82,337 @@ class App(tk.Tk):
         self.combo.pack(fill="x", **pad)
         row = ttk.Frame(f2)
         row.pack(fill="x")
-        ttk.Entry(row, textvariable=self.url).pack(side
+        ttk.Entry(row, textvariable=self.url).pack(side="left", fill="x", expand=True, **pad)
+        ttk.Button(row, text="حمل (من اللائحة/الرابط)", command=lambda: self.run_bg(self.download_rom)).pack(side="left", **pad)
+        row2 = ttk.Frame(f2)
+        row2.pack(fill="x")
+        ttk.Entry(row2, textvariable=self.rom_dir).pack(side="left", fill="x", expand=True, **pad)
+        ttk.Button(row2, text="اختيار فولدر ROM", command=self.pick_dir).pack(side="left", **pad)
+
+        f3 = ttk.LabelFrame(tab_rom, text="3) الفلاش")
+        f3.pack(fill="x", **pad)
+        ttk.Radiobutton(f3, text="Clean all (كيمسح كلشي)", variable=self.mode, value="flash_all.bat").pack(anchor="w", padx=8)
+        ttk.Radiobutton(f3, text="Save user data (كيحافظ على الداتا)", variable=self.mode, value="flash_all_except_storage.bat").pack(anchor="w", padx=8)
+        ttk.Button(f3, text="ابدأ الفلاش", command=self.start_flash).pack(anchor="e", **pad)
+
+        # --- تبويب الجهاز ---
+        d1 = ttk.LabelFrame(tab_dev, text="معلومات الجهاز")
+        d1.pack(fill="x", **pad)
+        ttk.Button(d1, text="قراءة المعلومات", command=lambda: self.run_bg(self.device_info)).pack(anchor="w", **pad)
+        ttk.Label(d1, textvariable=self.info, justify="left", font=("Consolas", 10)).pack(anchor="w", **pad)
+
+        d2 = ttk.LabelFrame(tab_dev, text="Reboot (كيخدم فـ Fastboot وفـ Android)")
+        d2.pack(fill="x", **pad)
+        ttk.Button(d2, text="Reboot System", command=lambda: self.run_bg(lambda: self.reboot("system"))).pack(side="left", **pad)
+        ttk.Button(d2, text="Reboot Recovery", command=lambda: self.run_bg(lambda: self.reboot("recovery"))).pack(side="left", **pad)
+        ttk.Button(d2, text="Reboot Fastboot", command=lambda: self.run_bg(lambda: self.reboot("bootloader"))).pack(side="left", **pad)
+
+        # --- تبويب Recovery / Boot ---
+        r1 = ttk.LabelFrame(tab_img, text="فلاش Recovery (TWRP / OrangeFox...)")
+        r1.pack(fill="x", **pad)
+        rr = ttk.Frame(r1)
+        rr.pack(fill="x")
+        ttk.Entry(rr, textvariable=self.recovery_path).pack(side="left", fill="x", expand=True, **pad)
+        ttk.Button(rr, text="اختيار .img", command=lambda: self.pick_img(self.recovery_path)).pack(side="left", **pad)
+        ttk.Checkbutton(r1, text="Reboot مباشرة لـ Recovery بعد الفلاش (مهم باش مايرجعش الـ stock recovery)",
+                        variable=self.reboot_after).pack(anchor="w", padx=8)
+        ttk.Button(r1, text="فلاش Recovery", command=self.start_flash_recovery).pack(anchor="e", **pad)
+
+        b1 = ttk.LabelFrame(tab_img, text="فلاش Boot (boot.img معدل ديال Magisk)")
+        b1.pack(fill="x", **pad)
+        br = ttk.Frame(b1)
+        br.pack(fill="x")
+        ttk.Entry(br, textvariable=self.boot_path).pack(side="left", fill="x", expand=True, **pad)
+        ttk.Button(br, text="اختيار .img", command=lambda: self.pick_img(self.boot_path)).pack(side="left", **pad)
+        ttk.Button(b1, text="فلاش Boot", command=self.start_flash_boot).pack(anchor="e", **pad)
+
+        self.bar = ttk.Progressbar(self, mode="determinate")
+        self.bar.pack(fill="x", **pad)
+        self.txt = scrolledtext.ScrolledText(self, height=12, state="disabled")
+        self.txt.pack(fill="both", expand=True, **pad)
+
+    def log(self, msg):
+        def _w():
+            self.txt.configure(state="normal")
+            self.txt.insert("end", msg + "\n")
+            self.txt.see("end")
+            self.txt.configure(state="disabled")
+        self.after(0, _w)
+
+    def set_progress(self, v):
+        self.after(0, lambda: self.bar.configure(value=v))
+
+    def pick_dir(self):
+        d = filedialog.askdirectory()
+        if d:
+            self.rom_dir.set(d)
+
+    def pick_img(self, var):
+        f = filedialog.askopenfilename(filetypes=[("Image", "*.img"), ("All files", "*.*")])
+        if f:
+            var.set(f)
+
+    def run_bg(self, fn):
+        if self.busy:
+            self.log("كاين شي عملية خدامة، تسنى حتى توفي.")
+            return
+
+        def wrap():
+            self.busy = True
+            try:
+                fn()
+            except Exception as e:
+                self.log(f"خطأ: {e}")
+            finally:
+                self.busy = False
+        threading.Thread(target=wrap, daemon=True).start()
+
+    # ---------- download helpers ----------
+    def download(self, url, dest):
+        self.log(f"تحميل: {url}")
+        req = urllib.request.Request(url, headers={"User-Agent": "JoyeuseFlasher/2.0"})
+        with urllib.request.urlopen(req) as r, open(dest, "wb") as f:
+            total = int(r.headers.get("Content-Length", 0))
+            done = 0
+            while True:
+                chunk = r.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+                done += len(chunk)
+                if total:
+                    self.set_progress(done * 100 / total)
+        self.set_progress(0)
+
+    def get_tools(self):
+        if os.path.exists(fastboot_exe()):
+            self.log("platform-tools موجودة من قبل.")
+            return
+        os.makedirs(WORK_DIR, exist_ok=True)
+        zp = os.path.join(WORK_DIR, "platform-tools.zip")
+        self.download(PT_URL, zp)
+        with zipfile.ZipFile(zp) as z:
+            z.extractall(WORK_DIR)
+        os.remove(zp)
+        self.log("تم تثبيت platform-tools.")
+
+    def ensure_tools(self):
+        if not os.path.exists(fastboot_exe()):
+            self.get_tools()
+
+    def load_rom_list(self):
+        try:
+            with urllib.request.urlopen(ROMS_JSON_URL, timeout=10) as r:
+                self.roms = json.loads(r.read().decode())
+        except Exception:
+            local = os.path.join(APP_DIR, "roms.json")
+            if os.path.exists(local):
+                with open(local, encoding="utf-8") as f:
+                    self.roms = json.load(f)
+        names = [f"{r['name']}" for r in self.roms]
+        self.after(0, lambda: self.combo.configure(values=names))
+        if names:
+            self.after(0, lambda: self.combo.current(0))
+        self.log(f"لائحة ROMs: {len(names)} عنصر.")
+
+    def download_rom(self):
+        url = self.url.get().strip()
+        if not url:
+            i = self.combo.current()
+            if i < 0:
+                raise RuntimeError("اختار ROM من اللائحة ولا لصق رابط.")
+            url = self.roms[i]["url"]
+        fname = url.split("?")[0].rsplit("/", 1)[-1]
+        dest = os.path.join(ROMS_DIR, fname)
+        if not os.path.exists(dest):
+            self.download(url, dest)
+        self.log("فك الضغط...")
+        out = os.path.join(ROMS_DIR, re.sub(r"\.(tgz|tar\.gz|tar|zip)$", "", fname))
+        os.makedirs(out, exist_ok=True)
+        if fname.endswith(".zip"):
+            with zipfile.ZipFile(dest) as z:
+                z.extractall(out)
+        else:
+            with tarfile.open(dest, "r:*") as t:
+                t.extractall(out)
+        root = out
+        for dp, _, files in os.walk(out):
+            if "flash_all.bat" in files:
+                root = dp
+                break
+        self.rom_dir.set(root)
+        self.log(f"ROM واجد: {root}")
+
+    # ---------- تشغيل الأدوات ----------
+    def run_tool(self, exe, args, cwd=None, quiet=False):
+        p = subprocess.Popen([exe] + args, cwd=cwd, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True,
+                             creationflags=CREATE_NO_WINDOW)
+        out = []
+        for line in p.stdout:
+            line = line.rstrip()
+            out.append(line)
+            if not quiet:
+                self.log(line)
+        p.wait()
+        return p.returncode, "\n".join(out)
+
+    def fb(self, args, cwd=None, quiet=False):
+        return self.run_tool(fastboot_exe(), args, cwd, quiet)
+
+    def adb(self, args, quiet=False):
+        return self.run_tool(adb_exe(), args, None, quiet)
+
+    def fastboot_present(self):
+        _, out = self.fb(["devices"], quiet=True)
+        return "fastboot" in out
+
+    def adb_present(self):
+        _, out = self.adb(["devices"], quiet=True)
+        return re.search(r"\tdevice\b", out) is not None
+
+    def getvar(self, name):
+        _, out = self.fb(["getvar", name], quiet=True)
+        m = re.search(rf"^{re.escape(name)}:\s*(.+)$", out, re.M | re.I)
+        return m.group(1).strip() if m else "?"
+
+    def check_device_for_flash(self):
+        """كيتأكد بلي الهاتف فـ fastboot، joyeuse، وbootloader مفتوح."""
+        self.ensure_tools()
+        if not self.fastboot_present():
+            raise RuntimeError("ما لقيت هاتف فـ Fastboot. (Vol- + Power ثم ركب الكابل)")
+        prod = self.getvar("product")
+        if "joyeuse" not in prod.lower():
+            raise RuntimeError(f"الهاتف ماشي joyeuse (product: {prod}). توقف الفلاش.")
+        if self.getvar("unlocked").lower() == "no":
+            raise RuntimeError("الـ bootloader مقفول. خاصك تفتحو قبل.")
+
+    # ---------- الجهاز ----------
+    def detect(self):
+        self.ensure_tools()
+        if not self.fastboot_present():
+            self.log("ما لقيت حتى هاتف. دخل الهاتف لـ Fastboot (Vol- + Power) وركب الكابل.")
+            return
+        prod = self.getvar("product")
+        unl = self.getvar("unlocked")
+        self.log(f"product: {prod} | unlocked: {unl}")
+        if "joyeuse" not in prod.lower():
+            self.log("تحذير: الهاتف ماشي joyeuse!")
+        if unl.lower() == "no":
+            self.log("تحذير: الـ bootloader مقفول.")
+
+    def device_info(self):
+        self.ensure_tools()
+        lines = []
+        if self.fastboot_present():
+            lines.append("الوضع: Fastboot")
+            for k in ("product", "unlocked", "anti", "version-bootloader", "serialno", "secure"):
+                lines.append(f"{k}: {self.getvar(k)}")
+        elif self.adb_present():
+            lines.append("الوضع: Android (adb)")
+            props = [("الموديل", "ro.product.model"), ("الاسم الداخلي", "ro.product.device"),
+                     ("Android", "ro.build.version.release"), ("MIUI", "ro.miui.ui.version.name"),
+                     ("البناء", "ro.build.version.incremental"), ("Patch", "ro.build.version.security_patch")]
+            for label, prop in props:
+                _, out = self.adb(["shell", "getprop", prop], quiet=True)
+                lines.append(f"{label}: {out.strip() or '?'}")
+        else:
+            lines.append("ما لقيت حتى هاتف.")
+            lines.append("Fastboot: Vol- + Power. Android: فعل USB debugging ووافق على الحاسوب.")
+        text = "\n".join(lines)
+        self.after(0, lambda: self.info.set(text))
+        self.log("تمت قراءة المعلومات.")
+
+    def reboot(self, target):
+        self.ensure_tools()
+        args = {"system": ["reboot"], "recovery": ["reboot", "recovery"],
+                "bootloader": ["reboot", "bootloader"]}[target]
+        if self.fastboot_present():
+            self.fb(args)
+        elif self.adb_present():
+            self.adb(args)
+        else:
+            self.log("ما لقيت حتى هاتف.")
+
+    # ---------- فلاش صور (Recovery / Boot) ----------
+    def start_flash_recovery(self):
+        self._start_img("recovery", self.recovery_path, self.reboot_after.get())
+
+    def start_flash_boot(self):
+        self._start_img("boot", self.boot_path, False)
+
+    def _start_img(self, part, var, then_recovery):
+        path = var.get().strip()
+        if not os.path.isfile(path):
+            messagebox.showerror("خطأ", "اختار ملف .img صحيح.")
+            return
+        if not path.lower().endswith(".img") and not messagebox.askyesno(
+                "تأكيد", "الملف ماشي .img. واش متأكد؟"):
+            return
+        if not messagebox.askyesno(
+                "تأكيد", f"غادي يتفلاش قسم {part} بالملف:\n{os.path.basename(path)}\n\n"
+                         "تأكد بلي الملف ديال joyeuse. واش كمل؟"):
+            return
+        self.run_bg(lambda: self.flash_image(part, path, then_recovery))
+
+    def flash_image(self, part, path, then_recovery):
+        self.check_device_for_flash()
+        self.log(f"فلاش {part}: {os.path.basename(path)}")
+        code, _ = self.fb(["flash", part, path])
+        if code != 0:
+            raise RuntimeError(f"فلاش {part} فشل (code {code}).")
+        self.log(f"تم فلاش {part}.")
+        if then_recovery:
+            self.log("Reboot لـ Recovery...")
+            self.fb(["reboot", "recovery"])
+
+    # ---------- فلاش ROM ----------
+    def start_flash(self):
+        rd = self.rom_dir.get()
+        bat = os.path.join(rd, self.mode.get())
+        if not os.path.isfile(bat):
+            messagebox.showerror("خطأ", f"ما لقيتش {self.mode.get()} فـ:\n{rd}")
+            return
+        if "joyeuse" not in open(bat, errors="ignore").read().lower() and \
+           not messagebox.askyesno("تأكيد", "ما لقيتش اسم joyeuse فالـ ROM. واش متأكد ROM ديال هاد الهاتف؟"):
+            return
+        msg = "غادي يتفلاش الهاتف"
+        if self.mode.get() == "flash_all.bat":
+            msg += " وتتمسح الداتا كاملة"
+        if not messagebox.askyesno("تأكيد", msg + ". واش كمل؟\nماتحيدش الكابل حتى يوفي."):
+            return
+        self.run_bg(lambda: self.flash(rd, bat))
+
+    def flash(self, rd, bat):
+        self.check_device_for_flash()
+        cmds = []
+        for line in open(bat, errors="ignore"):
+            s = line.strip()
+            if not s.lower().startswith("fastboot"):
+                continue
+            # حماية: ما كنشغلوش قفل الـ bootloader
+            if re.search(r"\b(oem\s+lock|flashing\s+lock)\b", s, re.I):
+                self.log(f"تخطي (قفل): {s}")
+                continue
+            s = s.replace("%*", "").replace("%~dp0", rd + os.sep)
+            parts = [p.strip('"') for p in shlex.split(s, posix=False)][1:]
+            cmds.append(parts)
+        if not cmds:
+            raise RuntimeError("ما لقيت حتى أمر fastboot فالسكريبت.")
+        for c in cmds:
+            for a in c:
+                if os.sep in a and not os.path.exists(a):
+                    raise RuntimeError(f"ملف ناقص: {a}")
+        for i, c in enumerate(cmds, 1):
+            self.log(f"[{i}/{len(cmds)}] fastboot {' '.join(os.path.basename(x) for x in c)}")
+            code, _ = self.fb(c, cwd=rd)
+            if code != 0:
+                self.log("توقف الفلاش بسبب خطأ. ماتعاودش تشغل الهاتف حتى تفهم السبب.")
+                raise RuntimeError(f"الأمر فشل (code {code})")
+            self.set_progress(i * 100 / len(cmds))
+        self.log("تم الفلاش بنجاح!")
+        self.after(0, lambda: messagebox.showinfo("تم", "الفلاش وفى. الهاتف غيعاود يشغل."))
+
+
+if __name__ == "__main__":
+    App().mainloop()
